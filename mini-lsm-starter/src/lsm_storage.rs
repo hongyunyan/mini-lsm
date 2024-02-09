@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
@@ -121,6 +121,8 @@ pub enum CompactionFilter {
 /// The storage interface of the LSM tree.
 pub(crate) struct LsmStorageInner {
     pub(crate) state: Arc<RwLock<Arc<LsmStorageState>>>,
+    // 这个 lock 用来管 state 的变更，put 和 delete 和 get 如果不触发 force-freeeze 的话，不会变更 state，所以不需要锁。
+    // 但是如果要触发 froce-freeze，就必须要要获得锁。
     pub(crate) state_lock: Mutex<()>,
     path: PathBuf,
     pub(crate) block_cache: Arc<BlockCache>,
@@ -279,7 +281,27 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
-        unimplemented!()
+        let state = Arc::clone(&self.state);
+        // get from memtable first
+        {
+            let memtable = Arc::clone(&(state.read().memtable));
+            if let Some(value) = memtable.get(_key) {
+                if value.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(value));
+            }
+        }
+        // get from immutable memtables
+        for imm_memtable in state.read().imm_memtables.iter() {
+            if let Some(value) = imm_memtable.get(_key) {
+                if value.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -287,14 +309,45 @@ impl LsmStorageInner {
         unimplemented!()
     }
 
+    pub fn try_freeze(&self, size: usize) -> Result<()> {
+        if size > self.options.target_sst_size {
+            let lock = self.state_lock.lock();
+            let state_read_guard = self.state.read();
+            if state_read_guard.memtable.approximate_size() > self.options.target_sst_size {
+                drop(state_read_guard);
+                self.force_freeze_memtable(&lock)?;
+            }
+        }
+        Ok(())
+    }
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+        let state = Arc::clone(&self.state);
+
+        let size;
+        {
+            let state_read_guard = state.read();
+            state_read_guard.memtable.put(_key, _value)?;
+            size = state_read_guard.memtable.approximate_size();
+        }
+
+        self.try_freeze(size)?;
+        Ok(())
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let state = Arc::clone(&self.state);
+
+        let size;
+        {
+            let state_read_guard = state.read();
+            state_read_guard.memtable.put(_key, &[])?;
+            size = state_read_guard.memtable.approximate_size();
+        }
+
+        self.try_freeze(size)?;
+        Ok(())
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {
@@ -319,7 +372,14 @@ impl LsmStorageInner {
 
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        unimplemented!()
+        let mut state = self.state.write(); //没想明白为什么要这样复制以后换一个，那开销很大啊，不理解
+        let mut new_state = state.as_ref().clone();
+        new_state.memtable = Arc::new(MemTable::create(self.next_sst_id()));
+        new_state
+            .imm_memtables
+            .insert(0, Arc::clone(&state.memtable));
+        *state = Arc::new(new_state);
+        Ok(())
     }
 
     /// Force flush the earliest-created immutable memtable to disk

@@ -9,6 +9,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
+use std::sync::atomic::Ordering;
 
 use crate::iterators::StorageIterator;
 use crate::key::KeySlice;
@@ -21,7 +22,7 @@ use crate::wal::Wal;
 /// chapters of week 1 and week 2.
 pub struct MemTable {
     map: Arc<SkipMap<Bytes, Bytes>>,
-    wal: Option<Wal>,
+    wal: Option<Wal>, // 为什么 wal 和 map 是放在一个 struct 里面的
     id: usize,
     approximate_size: Arc<AtomicUsize>,
 }
@@ -38,7 +39,12 @@ pub(crate) fn map_bound(bound: Bound<&[u8]>) -> Bound<Bytes> {
 impl MemTable {
     /// Create a new mem-table.
     pub fn create(_id: usize) -> Self {
-        unimplemented!()
+        MemTable {
+            map: Arc::new(SkipMap::new()),
+            wal: None,
+            id: _id,
+            approximate_size: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     /// Create a new mem-table with WAL
@@ -69,7 +75,7 @@ impl MemTable {
 
     /// Get a value by key.
     pub fn get(&self, _key: &[u8]) -> Option<Bytes> {
-        unimplemented!()
+        self.map.get(_key).map(|v| v.value().clone())
     }
 
     /// Put a key-value pair into the mem-table.
@@ -77,7 +83,11 @@ impl MemTable {
     /// In week 1, day 1, simply put the key-value pair into the skipmap.
     /// In week 2, day 6, also flush the data to WAL.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+        // 奥！虽然 skip map 会直接覆盖，如果要mvcc 会有额外 key 所以无所谓
+        self.map
+            .insert(Bytes::copy_from_slice(_key), Bytes::copy_from_slice(_value)); // 涉及内存拷贝问题
+        Arc::clone(&self.approximate_size).fetch_add(_key.len() + _value.len(), Ordering::SeqCst); //我感觉不需要 SeqCst
+        Ok(()) // 这玩意真的是要这个？
     }
 
     pub fn sync_wal(&self) -> Result<()> {
