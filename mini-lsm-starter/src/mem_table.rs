@@ -1,11 +1,9 @@
-#![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
-
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
@@ -99,7 +97,19 @@ impl MemTable {
 
     /// Get an iterator over a range of keys.
     pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
-        unimplemented!()
+        let mut mem_table_iter = MemTableIteratorBuilder {
+            map: self.map.clone(),
+            iter_builder: |map| map.range((map_bound(_lower), map_bound(_upper))),
+            item: (Bytes::new(), Bytes::new()),
+        }
+        .build();
+
+        let entry = mem_table_iter.with_iter_mut(|iter| match iter.next() {
+            Some(entry) => (entry.key().clone(), entry.value().clone()),
+            None => (Bytes::from_static(&[]), Bytes::from_static(&[])),
+        });
+        mem_table_iter.with_mut(|x| *x.item = entry);
+        mem_table_iter
     }
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
@@ -138,25 +148,30 @@ pub struct MemTableIterator {
     #[not_covariant]
     iter: SkipMapRangeIter<'this>,
     /// Stores the current key-value pair.
-    item: (Bytes, Bytes),
+    item: (Bytes, Bytes), // 这个为什么不是 引用？
 }
 
 impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.borrow_item().1.as_ref()
     }
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        KeySlice::from_slice(self.borrow_item().0.as_ref())
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        !self.borrow_item().0.is_empty()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        let entry = self.with_iter_mut(|iter| match iter.next() {
+            Some(entry) => (entry.key().clone(), entry.value().clone()),
+            None => (Bytes::from_static(&[]), Bytes::from_static(&[])),
+        });
+        self.with_mut(|x| *x.item = entry);
+        Ok(())
     }
 }

@@ -1,10 +1,9 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
+use anyhow::{Ok, Result};
+use moka::sync::Iter;
 use std::cmp::{self};
+use std::collections::binary_heap::PeekMut;
 use std::collections::BinaryHeap;
-
-use anyhow::Result;
+use std::mem;
 
 use crate::key::KeySlice;
 
@@ -47,7 +46,20 @@ pub struct MergeIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        unimplemented!()
+        let mut merge_iter = MergeIterator {
+            iters: BinaryHeap::new(),
+            current: None,
+        };
+        for (idx, iter) in iters.into_iter().enumerate() {
+            if iter.is_valid() {
+                merge_iter.iters.push(HeapWrapper(idx, iter));
+            }
+        }
+        if merge_iter.iters.is_empty() {
+            return merge_iter;
+        }
+        merge_iter.current = merge_iter.iters.pop();
+        merge_iter
     }
 }
 
@@ -57,18 +69,58 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
     type KeyType<'a> = KeySlice<'a>;
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.value()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.current
+            .as_ref()
+            .map(|x| x.1.is_valid())
+            .unwrap_or(false)
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        // // 因为所有的iter 内部也是按照 key 排序的，而且 binary heap 也是先根据 iter 的 第一个 key 排序的
+        // // 所以我们每次先取出有这个 key 的 iter，把他们第一个都删掉。
+        // // 把含有这个 key 的 iter 做 pop，然后塞进 binary heap
+
+        let current_iter = self.current.as_mut().unwrap();
+
+        // 找到下一个 key 相同的 iter
+        while let Some(mut iter) = self.iters.peek_mut() {
+            if iter.1.key() == current_iter.1.key() {
+                if let e @ Err(_) = iter.1.next() {
+                    PeekMut::pop(iter);
+                    return e;
+                }
+
+                if !iter.1.is_valid() {
+                    PeekMut::pop(iter);
+                }
+            } else {
+                break;
+            }
+        }
+
+        current_iter.1.next()?;
+
+        if current_iter.1.is_valid() {
+            // compare with the top one
+            if let Some(mut iter) = self.iters.peek_mut() {
+                if *current_iter < *iter {
+                    std::mem::swap(&mut *iter, current_iter)
+                };
+            }
+        } else {
+            if let Some(iter) = self.iters.pop() {
+                self.current = Some(iter);
+            }
+        }
+
+        Ok(())
     }
 }

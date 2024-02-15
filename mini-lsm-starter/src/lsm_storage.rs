@@ -1,5 +1,3 @@
-#![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
-
 use std::collections::HashMap;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
@@ -15,9 +13,11 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::merge_iterator::MergeIterator;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
+use crate::mem_table::MemTableIterator;
 use crate::mvcc::LsmMvccInner;
 use crate::table::SsTable;
 
@@ -372,13 +372,17 @@ impl LsmStorageInner {
 
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        let mut state = self.state.write(); //没想明白为什么要这样复制以后换一个，那开销很大啊，不理解
-        let mut new_state = state.as_ref().clone();
-        new_state.memtable = Arc::new(MemTable::create(self.next_sst_id()));
-        new_state
-            .imm_memtables
-            .insert(0, Arc::clone(&state.memtable));
-        *state = Arc::new(new_state);
+        let new_memtable = Arc::new(MemTable::create(self.next_sst_id()));
+
+        {
+            let mut state_write_guard = self.state.write(); //没想明白为什么要这样复制以后换一个，那开销很大啊，不理解
+            let mut new_state = state_write_guard.as_ref().clone();
+            new_state
+                .imm_memtables
+                .insert(0, Arc::clone(&state_write_guard.memtable));
+            new_state.memtable = new_memtable;
+            *state_write_guard = Arc::new(new_state);
+        }
         Ok(())
     }
 
@@ -398,6 +402,19 @@ impl LsmStorageInner {
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        unimplemented!()
+        // 每个 memtable --> MemTableIterator,然后组装成 mergeIterator<MemTableIterator>
+
+        let mut mem_table_iterator_vec: Vec<Box<MemTableIterator>> = Vec::new();
+        // memtable first
+        mem_table_iterator_vec.push(Box::new(self.state.read().memtable.scan(_lower, _upper)));
+
+        // immutable memtables
+        for imm_memtable in self.state.read().imm_memtables.iter() {
+            mem_table_iterator_vec.push(Box::new(imm_memtable.scan(_lower, _upper)));
+        }
+
+        let mem_table_merge_iterator = MergeIterator::create(mem_table_iterator_vec);
+        let lsm_iterator = LsmIterator::new(mem_table_merge_iterator)?;
+        Ok(FusedIterator::new(lsm_iterator))
     }
 }
