@@ -1,7 +1,6 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use anyhow::Result;
+
+use crate::key::Key;
 
 use super::StorageIterator;
 
@@ -10,7 +9,7 @@ use super::StorageIterator;
 pub struct TwoMergeIterator<A: StorageIterator, B: StorageIterator> {
     a: A,
     b: B,
-    // Add fields as need
+    choose_a: bool,
 }
 
 impl<
@@ -19,7 +18,31 @@ impl<
     > TwoMergeIterator<A, B>
 {
     pub fn create(a: A, b: B) -> Result<Self> {
-        unimplemented!()
+        let mut iter = TwoMergeIterator {
+            a,
+            b,
+            choose_a: true,
+        };
+        iter.choose_a = iter.choose_a();
+        println!("when begin choose_a: {}", iter.choose_a);
+        Ok(iter)
+    }
+
+    fn choose_a(&self) -> bool {
+        if !self.a.is_valid() {
+            return false;
+        }
+        if !self.b.is_valid() {
+            return true;
+        }
+        self.a.key() <= self.b.key()
+    }
+
+    fn skip_b(&mut self) -> Result<()> {
+        if self.b.is_valid() && self.b.key() == self.a.key() {
+            self.b.next()?;
+        }
+        Ok(())
     }
 }
 
@@ -31,18 +54,38 @@ impl<
     type KeyType<'a> = A::KeyType<'a>;
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        if self.choose_a {
+            self.a.key()
+        } else {
+            self.b.key()
+        }
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        if self.choose_a {
+            self.a.value()
+        } else {
+            self.b.value()
+        }
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        if self.choose_a {
+            self.a.is_valid()
+        } else {
+            self.b.is_valid()
+        }
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.choose_a {
+            self.skip_b()?;
+            self.a.next()?;
+        } else {
+            self.b.next()?;
+        }
+        self.choose_a = self.choose_a();
+        println!("next: choose_a: {}", self.choose_a,);
+        Ok(())
     }
 }

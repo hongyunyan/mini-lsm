@@ -63,6 +63,8 @@ impl SsTableBuilder {
     fn finish_block(&mut self) {
         let builder = std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
         let last_block = builder.build();
+        println!("finish_block {:?}", last_block.data);
+
         let encode_block = last_block.encode();
         self.data.extend_from_slice(&encode_block);
 

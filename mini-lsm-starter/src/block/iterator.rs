@@ -112,6 +112,8 @@ impl BlockIterator {
     }
 
     fn get_key_bases_on_offset(&self, offset: usize) -> KeyVec {
+        println!("self.block.data {:?}", self.block.data);
+
         assert!(self.block.data.len() > offset + 2);
         let key_len =
             u16::from_be_bytes([self.block.data[offset], self.block.data[offset + 1]]) as usize;
@@ -125,8 +127,8 @@ impl BlockIterator {
             u16::from_be_bytes([self.block.data[offset], self.block.data[offset + 1]]) as usize;
         let value_offset_begin = offset + 2 + key_len;
 
-        assert!(self.block.data.len() > value_offset_begin + 2);
-        let value_len = u16::from_be_bytes([
+        assert!(self.block.data.len() >= value_offset_begin + 2);
+        let value_len: usize = u16::from_be_bytes([
             self.block.data[value_offset_begin],
             self.block.data[value_offset_begin + 1],
         ]) as usize;
