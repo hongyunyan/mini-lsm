@@ -24,9 +24,9 @@ pub struct LsmIterator {
 impl LsmIterator {
     pub(crate) fn new(iter: LsmIteratorInner, end_bound: Bound<Bytes>) -> Result<Self> {
         let mut iter = Self {
+            is_valid: iter.is_valid(),
             inner: iter,
             end_bound: end_bound,
-            is_valid: true,
         };
         iter.move_to_non_delete()?;
         Ok(iter)
@@ -36,7 +36,6 @@ impl LsmIterator {
 impl LsmIterator {
     fn move_to_non_delete(&mut self) -> Result<()> {
         while self.is_valid() && self.value().is_empty() {
-            //println!("move_to_non_delete call next_inner");
             self.next_inner()?;
         }
         Ok(())
@@ -46,7 +45,6 @@ impl LsmIterator {
         self.inner.next()?;
         if !self.inner.is_valid() {
             self.is_valid = false;
-            //println!("next_inner inner is_valid: {}", self.is_valid);
             return Ok(());
         }
         match self.end_bound.as_ref() {
@@ -54,11 +52,6 @@ impl LsmIterator {
             Bound::Included(key) => self.is_valid = self.inner.key() <= Key::from_slice(key),
             Bound::Excluded(key) => self.is_valid = self.inner.key() < Key::from_slice(key),
         }
-        // println!(
-        //     "next_inner self.inner.key(): {:?}",
-        //     self.inner.key().into_inner()
-        // );
-        // println!("next_inner is_valid: {}", self.is_valid);
         Ok(())
     }
 }
@@ -82,6 +75,10 @@ impl StorageIterator for LsmIterator {
         self.next_inner()?;
         self.move_to_non_delete()?;
         Ok(())
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.inner.num_active_iterators()
     }
 }
 
@@ -135,5 +132,9 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
             };
         }
         Ok(())
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.iter.num_active_iterators()
     }
 }

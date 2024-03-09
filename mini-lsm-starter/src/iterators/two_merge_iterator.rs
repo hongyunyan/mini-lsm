@@ -24,7 +24,12 @@ impl<
             choose_a: true,
         };
         iter.choose_a = iter.choose_a();
-        println!("when begin choose_a: {}", iter.choose_a);
+        println!("TwoMergeIterator create choose_a: {}", iter.choose_a);
+        println!(
+            "TwoMergeIterator a is_valid, b is_valid: {}, {}",
+            iter.a.is_valid(),
+            iter.b.is_valid()
+        );
         Ok(iter)
     }
 
@@ -71,8 +76,16 @@ impl<
 
     fn is_valid(&self) -> bool {
         if self.choose_a {
+            println!(
+                "TwoMergeIterator is_valid choose_a is_valid: {}",
+                self.a.is_valid()
+            );
             self.a.is_valid()
         } else {
+            println!(
+                "TwoMergeIterator is_valid choose_b is_valid: {}",
+                self.b.is_valid()
+            );
             self.b.is_valid()
         }
     }
@@ -85,7 +98,10 @@ impl<
             self.b.next()?;
         }
         self.choose_a = self.choose_a();
-        println!("next: choose_a: {}", self.choose_a,);
         Ok(())
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.a.num_active_iterators() + self.b.num_active_iterators()
     }
 }

@@ -48,6 +48,9 @@ impl SsTableBuilder {
         self.finish_block();
         self.builder = BlockBuilder::new(self.block_size);
         let flag = self.builder.add(key, value);
+
+        self.first_key.extend(key.into_inner());
+        self.last_key.extend(key.into_inner());
         assert!(flag);
     }
 
@@ -63,7 +66,6 @@ impl SsTableBuilder {
     fn finish_block(&mut self) {
         let builder = std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
         let last_block = builder.build();
-        println!("finish_block {:?}", last_block.data);
 
         let encode_block = last_block.encode();
         self.data.extend_from_slice(&encode_block);
@@ -92,8 +94,8 @@ impl SsTableBuilder {
             file: FileObject::create(path.as_ref(), buf)?,
             block_cache,
             id,
-            first_key: KeyBytes::from_bytes(self.first_key.into()),
-            last_key: KeyBytes::from_bytes(self.last_key.into()),
+            first_key: self.meta.first().unwrap().first_key.clone(),
+            last_key: self.meta.last().unwrap().first_key.clone(),
             bloom: None,
             max_ts: u64::MAX,
             block_meta_offset: offset,
