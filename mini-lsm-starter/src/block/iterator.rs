@@ -20,13 +20,14 @@ pub struct BlockIterator {
 
 impl BlockIterator {
     fn new(block: Arc<Block>) -> Self {
-        Self {
+        let mut iter = Self {
             block,
             key: KeyVec::new(),
             value_range: (0, 0),
             idx: 0,
             first_key: KeyVec::new(),
-        }
+        };
+        iter
     }
 
     /// Creates a block iterator and seek to the first entry.
@@ -111,12 +112,31 @@ impl BlockIterator {
         self.value_range = self.get_value_range_bases_on_offset(offset);
     }
 
-    fn get_key_bases_on_offset(&self, offset: usize) -> KeyVec {
+    fn get_key_bases_on_offset(&mut self, offset: usize) -> KeyVec {
         assert!(self.block.data.len() > offset + 2);
         let key_len =
             u16::from_be_bytes([self.block.data[offset], self.block.data[offset + 1]]) as usize;
         assert!(self.block.data.len() > offset + 2 + key_len);
-        KeyVec::from_vec(self.block.data[offset + 2..offset + 2 + key_len].to_vec())
+        // KeyVec::from_vec(self.block.data[offset + 2..offset + 2 + key_len].to_vec())
+        if offset == 0 {
+            let key = KeyVec::from_vec(self.block.data[offset + 2..offset + 2 + key_len].to_vec());
+            self.first_key = key.clone();
+            key
+        } else {
+            if self.first_key.is_empty() {
+                self.first_key = self.get_key_bases_on_offset(0);
+            }
+
+            let compress_key = &self.block.data[offset + 2..offset + 2 + key_len];
+            let key_overlap_len = u16::from_be_bytes([compress_key[0], compress_key[1]]) as usize;
+            let rest_overlap_len = u16::from_be_bytes([compress_key[2], compress_key[3]]) as usize;
+            if key_overlap_len == 0 {
+                return KeyVec::from_vec(compress_key[4..].to_vec());
+            }
+            let mut key_prefix = self.first_key.raw_ref()[0..key_overlap_len].to_vec();
+            key_prefix.extend_from_slice(&compress_key[4..4 + rest_overlap_len]);
+            KeyVec::from_vec(key_prefix)
+        }
     }
 
     fn get_value_range_bases_on_offset(&self, offset: usize) -> (usize, usize) {

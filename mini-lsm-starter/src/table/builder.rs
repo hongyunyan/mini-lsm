@@ -5,8 +5,14 @@ use anyhow::Result;
 use bytes::BufMut;
 use nom::AsBytes;
 
-use super::{BlockMeta, FileObject, SsTable};
-use crate::{block::BlockBuilder, key::KeyBytes, key::KeySlice, lsm_storage::BlockCache};
+// use bloom::Bloom;
+
+use super::{BlockMeta, Bloom, FileObject, SsTable};
+use crate::{
+    block::BlockBuilder,
+    key::{Key, KeyBytes, KeySlice},
+    lsm_storage::BlockCache,
+};
 
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {
@@ -15,6 +21,7 @@ pub struct SsTableBuilder {
     last_key: Vec<u8>,  //还不太理解为什么要这个，为了确认范围？
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
+    key_hashes: Vec<u32>,
     block_size: usize,
 }
 
@@ -27,6 +34,7 @@ impl SsTableBuilder {
             last_key: Vec::new(),
             data: Vec::new(),
             meta: Vec::new(),
+            key_hashes: Vec::new(),
             block_size,
         }
     }
@@ -42,6 +50,8 @@ impl SsTableBuilder {
         if self.builder.add(key, value) {
             self.last_key.clear();
             self.last_key.extend(key.into_inner());
+            self.key_hashes
+                .push(farmhash::fingerprint32(key.into_inner()));
             return;
         }
         // finish the laster block and create new block
@@ -51,6 +61,8 @@ impl SsTableBuilder {
 
         self.first_key.extend(key.into_inner());
         self.last_key.extend(key.into_inner());
+        self.key_hashes
+            .push(farmhash::fingerprint32(key.into_inner()));
         assert!(flag);
     }
 
@@ -88,7 +100,14 @@ impl SsTableBuilder {
         let mut buf = self.data;
         let offset = buf.len();
         BlockMeta::encode_block_meta(&self.meta, &mut buf);
+
         buf.put_u32(offset as u32);
+
+        let bloom_offset = buf.len();
+        let bits_per_key = Bloom::bloom_bits_per_key(self.key_hashes.len(), 0.01);
+        let bloom = Bloom::build_from_key_hashes(&self.key_hashes, bits_per_key);
+        Bloom::encode(&bloom, &mut buf);
+        buf.put_u32(bloom_offset as u32);
 
         let sst_table = SsTable {
             file: FileObject::create(path.as_ref(), buf)?,
@@ -96,7 +115,7 @@ impl SsTableBuilder {
             id,
             first_key: self.meta.first().unwrap().first_key.clone(),
             last_key: self.meta.last().unwrap().first_key.clone(),
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: u64::MAX,
             block_meta_offset: offset,
             block_meta: self.meta,

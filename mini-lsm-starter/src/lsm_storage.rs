@@ -343,10 +343,16 @@ impl LsmStorageInner {
             if (table.first_key().clone().into_inner() <= _key)
                 || (table.last_key().clone().into_inner() >= _key)
             {
-                iters.push(Box::new(SsTableIterator::create_and_seek_to_key(
-                    table,
-                    Key::from_slice(_key),
-                )?));
+                let contains_key = match &table.bloom {
+                    Some(bloom) => bloom.may_contain(farmhash::fingerprint32(_key)),
+                    None => true,
+                };
+                if contains_key {
+                    iters.push(Box::new(SsTableIterator::create_and_seek_to_key(
+                        table,
+                        Key::from_slice(_key),
+                    )?));
+                }
             }
         }
         let iter = MergeIterator::create(iters);

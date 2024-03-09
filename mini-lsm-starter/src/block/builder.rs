@@ -1,6 +1,7 @@
 use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
+use std::cmp::min;
 
 /// Builds a block.
 pub struct BlockBuilder {
@@ -37,19 +38,39 @@ impl BlockBuilder {
 
         self.offsets.push(self.data.len() as u16);
         // key len
-        self.data
-            .extend_from_slice(&(key.len() as u16).to_be_bytes());
-        // push key into data
-        self.data.extend_from_slice(key.into_inner());
+        if self.is_empty() {
+            // 第一条
+            self.data
+                .extend_from_slice(&(key.len() as u16).to_be_bytes());
+            self.first_key.set_from_slice(key);
+            // push key into data
+            self.data.extend_from_slice(key.into_inner());
+        } else {
+            // 和 first key 比较
+            let mut same_prefix = 0;
+            for i in 0..min(key.len(), self.first_key.len()) - 1 {
+                if key.into_inner()[i] == self.first_key.raw_ref()[i] {
+                    same_prefix += 1;
+                } else {
+                    break;
+                }
+            }
+            // key_overlap_len (u16) | rest_key_len (u16) | key (rest_key_len)
+            // len
+            self.data
+                .extend_from_slice(&((2 + 2 + key.len() - same_prefix) as u16).to_be_bytes());
+            // data
+            self.data
+                .extend_from_slice(&(same_prefix as u16).to_be_bytes());
+            self.data
+                .extend_from_slice(&((key.len() - same_prefix) as u16).to_be_bytes());
+            self.data.extend(&key.into_inner()[same_prefix..]);
+        }
         // value len
         self.data
             .extend_from_slice(&(value.len() as u16).to_be_bytes());
         // push value into data
         self.data.extend_from_slice(value);
-
-        if self.is_empty() {
-            self.first_key.set_from_slice(key);
-        }
         true
     }
 
